@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 11px/1.45 Inter, -apple-system, system-ui, sans-serif; margin: 0; padding: 12px 16px 16px; color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  h1 { font-size: 12px; font-weight: 600; margin: 0 0 8px; }
+  .drop { border: 1.5px dashed var(--figma-color-border, #c9c9c9); border-radius: 6px; padding: 22px 12px; text-align: center; cursor: pointer; transition: background .15s; }
+  .drop.over, .drop:hover { background: var(--figma-color-bg-hover, #f3f3f3); }
+  .drop strong { display: block; font-weight: 600; margin-bottom: 2px; }
+  .drop input { display: none; }
+  .muted { color: var(--figma-color-text-secondary, #777); }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .row label { flex: 1; }
+  input[type=text], input[type=number], select { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid var(--figma-color-border, #ddd); border-radius: 4px; background: var(--figma-color-bg, #fff); color: inherit; font: inherit; }
+  .check { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  button { margin-top: 12px; width: 100%; padding: 7px; border-radius: 6px; border: 0; background: var(--figma-color-bg-brand, #0d99ff); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary { background: transparent; color: inherit; border: 1px solid var(--figma-color-border, #ddd); }
+  progress { width: 100%; margin-top: 12px; height: 6px; }
+  #status { margin-top: 6px; min-height: 16px; }
+  #log { margin-top: 8px; max-height: 140px; overflow: auto; font-size: 10px; white-space: pre-wrap; color: var(--figma-color-text-secondary, #777); }
+  .warn { color: #b8860b; }
+  .err { color: #d93025; }
+</style>
+</head>
+<body>
+  <h1>PDF to Frames</h1>
+  <label class="drop" id="drop">
+    <strong>Choose a PDF or drop it here</strong>
+    <span class="muted" id="fileLabel">Each page becomes a frame with editable text, vectors and images.</span>
+    <input type="file" id="file" accept="application/pdf,.pdf" />
+  </label>
+
+  <div class="row">
+    <label>Pages <input type="text" id="pages" placeholder="all (e.g. 1-3, 5)" /></label>
+    <label>Scale <input type="number" id="scale" value="1" min="0.25" max="4" step="0.25" /></label>
+  </div>
+  <div class="row">
+    <label>Text
+      <select id="textMode">
+        <option value="keepBreaks">Paragraphs, keep line breaks (exact)</option>
+        <option value="flow">Paragraphs, flowing text</option>
+        <option value="lines">One layer per line</option>
+      </select>
+    </label>
+  </div>
+  <label class="check"><input type="checkbox" id="vectors" checked /> Import vector graphics</label>
+  <label class="check"><input type="checkbox" id="images" checked /> Import images</label>
+
+  <button id="run" disabled>Import</button>
+  <button id="cancel" class="secondary" hidden>Cancel</button>
+  <progress id="progress" value="0" max="1" hidden></progress>
+  <div id="status" class="muted"></div>
+  <div id="log"></div>
+  <!--BUNDLE-->
+</body>
+</html>

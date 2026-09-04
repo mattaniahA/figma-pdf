@@ -1,0 +1,21 @@
+{
+  "name": "figma-pdf-to-frames",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma plugin: import PDFs as editable frames (text, vectors, images)",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.138.0",
+    "esbuild": "^0.28.2",
+    "pdfjs-dist": "^5.7.284",
+    "puppeteer-core": "^25.10.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

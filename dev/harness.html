@@ -1,0 +1,57 @@
+<!doctype html><html><head><meta charset="utf-8"><title>PDF→Frames harness</title>
+<style>
+body { margin:0; font: 12px system-ui; display:flex; height:100vh; }
+#side { width: 380px; border-right: 1px solid #ddd; display:flex; flex-direction:column; }
+iframe { width: 100%; flex: 1; border: 0; }
+#log { height: 200px; overflow:auto; font: 10px monospace; padding: 6px; border-top: 1px solid #ddd; white-space: pre-wrap; }
+#pages { flex:1; overflow:auto; padding: 20px; background:#eee; }
+.page { position: relative; background: white; box-shadow: 0 2px 8px rgba(0,0,0,.2); margin-bottom: 24px; overflow:hidden; }
+.page > svg, .page > img { position:absolute; left:0; top:0; }
+.t { position:absolute; white-space:pre; transform-origin: 0 0; line-height: 1; }
+.t.dbg { outline: 1px solid rgba(255,0,0,.35); }
+</style></head><body>
+<div id="side"><iframe id="ui" sandbox="allow-scripts"></iframe><div id="log"></div></div>
+<div id="pages"></div>
+<script>
+const logEl = document.getElementById('log'); const ui = document.getElementById('ui');
+const log = (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = 1e9; console.log('[harness]', s); };
+window.__pages = [];
+fetch('../dist/ui.html').then(r => r.text()).then(html => { document.getElementById('ui').srcdoc = html; });
+const params = new URLSearchParams(location.search);
+window.__done = false;
+ui.addEventListener('load', async () => {
+  const pdf = params.get('pdf'); if (!pdf) return;
+  const data = await fetch(pdf).then(r => r.arrayBuffer());
+  send({ type: 'dev-file', name: pdf.split('/').pop(), data, options: { textMode: params.get('mode') || 'keepBreaks' } });
+});
+const send = (msg) => ui.contentWindow.postMessage({ pluginMessage: msg }, '*');
+window.addEventListener('message', (e) => {
+  const msg = e.data && e.data.pluginMessage; if (!msg) return;
+  if (msg.type === 'begin') { log(`begin ${msg.fileName} pages=${msg.pageCount} ${JSON.stringify(msg.options)}`); document.getElementById('pages').innerHTML=''; window.__pages = []; return; }
+  if (msg.type === 'page') {
+    const p = msg.page; window.__pages.push(p);
+    log(`page ${p.index} ${p.width}x${p.height}: texts=${p.texts.length} elements=${p.elements.length} warnings=${p.warnings.join('; ')}`);
+    render(p); send({ type: 'page-done', pageIndex: p.index }); return;
+  }
+  if (msg.type === 'done') { log('done'); window.__done = true; document.title = 'DONE'; send({type:'fonts', mapping:{}}); send({ type: 'done', frameCount: window.__pages.length }); return; }
+  log(msg.type);
+});
+function render(p) {
+  const div = document.createElement('div'); div.className='page'; div.style.width=p.width+'px'; div.style.height=p.height+'px';
+  for (const el of p.elements) {
+    if (el.kind === 'vector') { const w = document.createElement('div'); w.innerHTML = el.vector.svg; w.firstChild.style.position='absolute'; div.appendChild(w.firstChild); }
+    else { const img = new Image(); const [a,b,c,d,e,f] = el.image.transform; img.src = URL.createObjectURL(new Blob([el.image.png],{type:'image/png'})); img.style.cssText=`width:${el.image.width}px;height:${el.image.height}px;transform-origin:0 0;transform:matrix(${a},${b},${c},${d},${e},${f});opacity:${el.image.opacity}`; div.appendChild(img); }
+  }
+  for (const t of p.texts) {
+    const d = document.createElement('div'); d.className = 't' + (location.hash==='#dbg'?' dbg':'');
+    const glyph = (t.ascent - t.descent) * t.fontSize; const lh = t.lineHeight ?? Math.max(glyph, t.fontSize*1.1);
+    const top = (lh - glyph)/2 + t.ascent*t.fontSize;
+    const rad = t.angle*Math.PI/180;
+    d.style.left = (t.x + top*Math.sin(rad)) + 'px'; d.style.top = (t.y - top*Math.cos(rad)) + 'px';
+    d.style.transform = `rotate(${t.angle}deg)`; d.style.lineHeight = lh + 'px'; d.style.fontSize = t.fontSize + 'px'; d.style.letterSpacing = (t.letterSpacing||0) + 'px';
+    for (const s of t.segments) { const span = document.createElement('span'); span.textContent = s.text; span.style.cssText = `font-family:${s.fontName.replace(/^[A-Z]{6}\+/,'').split(/[-,]/)[0]}, sans-serif;font-weight:${s.bold?700:400};font-style:${s.italic?'italic':'normal'};font-size:${s.fontSize}px;color:rgb(${s.color.r*255|0},${s.color.g*255|0},${s.color.b*255|0});opacity:${s.opacity}`; d.appendChild(span); }
+    div.appendChild(d);
+  }
+  document.getElementById('pages').appendChild(div);
+}
+</script></body></html>

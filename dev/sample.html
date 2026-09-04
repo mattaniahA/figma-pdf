@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page { size: 612px 792px; margin: 0; }
+body { margin: 0; width: 612px; height: 792px; font-family: Helvetica, Arial, sans-serif; color: #222; position: relative; }
+.hero { background: linear-gradient(90deg, #4f46e5, #ec4899); color: white; padding: 40px 48px; }
+h1 { margin: 0; font-size: 34px; font-weight: 700; }
+.hero p { margin: 8px 0 0; font-size: 14px; opacity: .9; }
+.body { padding: 32px 48px; }
+p.lead { font-size: 13px; line-height: 20px; width: 380px; }
+p.lead b { color: #4f46e5; } p.lead i { font-family: Georgia, serif; }
+table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 12px; }
+th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; }
+th { background: #f1f5f9; font-weight: 700; }
+.badge { display: inline-block; background: #22c55e; color: white; border-radius: 12px; padding: 2px 10px; font-size: 11px; }
+.rot { position: absolute; right: 30px; top: 300px; transform: rotate(-90deg); transform-origin: right top; font-size: 12px; color: #64748b; letter-spacing: 2px; }
+.mono { font-family: "Courier New", monospace; font-size: 11px; color: #0f172a; background: #f8fafc; padding: 8px; border-left: 3px solid #f59e0b; margin-top: 18px; }
+</style></head><body>
+<div class="hero"><h1>Quarterly Design Review</h1><p>Prepared for the product team · Q3 2026</p></div>
+<div class="body">
+<p class="lead">This document is a <b>synthetic sample</b> used to test PDF import. It mixes <i>serif italic text</i>, bold runs, and colours across two lines of a paragraph so the text grouping logic can be verified.</p>
+<svg width="516" height="120" viewBox="0 0 516 120">
+  <rect x="0" y="0" width="160" height="100" rx="12" fill="#fde68a" stroke="#d97706" stroke-width="3"/>
+  <circle cx="260" cy="50" r="45" fill="#60a5fa"/>
+  <path d="M340 100 L400 10 L460 100 Z" fill="none" stroke="#ef4444" stroke-width="4" stroke-linejoin="round" stroke-dasharray="8 4"/>
+  <ellipse cx="490" cy="50" rx="20" ry="45" fill="#a78bfa" opacity="0.6"/>
+</svg>
+<table><tr><th>Metric</th><th>Value</th><th>Status</th></tr>
+<tr><td>Text layers</td><td>42</td><td><span class="badge">OK</span></td></tr>
+<tr><td>Vectors</td><td>7</td><td><span class="badge">OK</span></td></tr></table>
+<div class="mono">const frame = figma.createFrame();</div>
+<img style="margin-top:18px;width:120px;height:80px" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='80'><rect width='120' height='80' fill='%23f97316'/><circle cx='60' cy='40' r='25' fill='white'/></svg>">
+</div>
+<div class="rot">ROTATED LABEL</div>
+</body></html>

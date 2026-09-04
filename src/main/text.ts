@@ -18,7 +18,7 @@ export async function createTextNode(spec: TextSpec, fonts: FontResolver, parent
   const lineHeight = spec.lineHeight ?? Math.max(glyphHeight, spec.fontSize * 1.1);
   node.lineHeight = { unit: "PIXELS", value: lineHeight };
   node.letterSpacing = { unit: "PIXELS", value: spec.letterSpacing || 0 };
-  node.paragraphSpacing = 0;
+  node.paragraphSpacing = spec.paragraphSpacing || 0;
 
   let offset = 0;
   for (let i = 0; i < spec.segments.length; i++) {
@@ -32,8 +32,10 @@ export async function createTextNode(spec: TextSpec, fonts: FontResolver, parent
     offset = end;
   }
 
+  if (spec.list) node.setRangeListOptions(0, characters.length, { type: spec.list });
+
   parent.appendChild(node);
-  node.name = characters.split("\n")[0].slice(0, 40);
+  node.name = (spec.list ? "List: " : "") + characters.split(/[\n\u2028]/)[0].slice(0, 40);
 
   // Position: Figma centres the glyph box inside the line-height box, so the
   // first baseline sits at top + (lineHeight - glyphHeight)/2 + ascent.

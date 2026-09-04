@@ -9,6 +9,7 @@ iframe { width: 100%; flex: 1; border: 0; }
 .page > svg, .page > img { position:absolute; left:0; top:0; }
 .t { position:absolute; white-space:pre; transform-origin: 0 0; line-height: 1; }
 .t.dbg { outline: 1px solid rgba(255,0,0,.35); }
+.t li + li { margin-top: var(--ps, 0); }
 </style></head><body>
 <div id="side"><iframe id="ui" sandbox="allow-scripts"></iframe><div id="log"></div></div>
 <div id="pages"></div>
@@ -43,13 +44,13 @@ function render(p) {
     else { const img = new Image(); const [a,b,c,d,e,f] = el.image.transform; img.src = URL.createObjectURL(new Blob([el.image.png],{type:'image/png'})); img.style.cssText=`width:${el.image.width}px;height:${el.image.height}px;transform-origin:0 0;transform:matrix(${a},${b},${c},${d},${e},${f});opacity:${el.image.opacity}`; div.appendChild(img); }
   }
   for (const t of p.texts) {
-    const d = document.createElement('div'); d.className = 't' + (location.hash==='#dbg'?' dbg':'');
+    const d = document.createElement(t.list ? 'ul' : 'div'); if (t.list) { d.style.margin='0'; d.style.paddingLeft='1.2em'; d.style.listStyle = t.list === 'ORDERED' ? 'decimal' : 'disc'; } if (t.paragraphSpacing) d.style.setProperty('--ps', t.paragraphSpacing + 'px'); d.className = 't' + (location.hash==='#dbg'?' dbg':'');
     const glyph = (t.ascent - t.descent) * t.fontSize; const lh = t.lineHeight ?? Math.max(glyph, t.fontSize*1.1);
     const top = (lh - glyph)/2 + t.ascent*t.fontSize;
     const rad = t.angle*Math.PI/180;
     d.style.left = (t.x + top*Math.sin(rad)) + 'px'; d.style.top = (t.y - top*Math.cos(rad)) + 'px';
     d.style.transform = `rotate(${t.angle}deg)`; d.style.lineHeight = lh + 'px'; d.style.fontSize = t.fontSize + 'px'; d.style.letterSpacing = (t.letterSpacing||0) + 'px';
-    for (const s of t.segments) { const span = document.createElement('span'); span.textContent = s.text; span.style.cssText = `font-family:${s.fontName.replace(/^[A-Z]{6}\+/,'').split(/[-,]/)[0]}, sans-serif;font-weight:${s.bold?700:400};font-style:${s.italic?'italic':'normal'};font-size:${s.fontSize}px;color:rgb(${s.color.r*255|0},${s.color.g*255|0},${s.color.b*255|0});opacity:${s.opacity}`; d.appendChild(span); }
+    for (const s of t.segments) { const span = document.createElement('span'); span.innerHTML = s.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g, t.list ? '</li><li>' : '\n').replace(/\u2028/g,'<br>'); if (t.list && !d.firstChild) { const li=document.createElement('li'); d.appendChild(li); } span.style.cssText = `font-family:${s.fontName.replace(/^[A-Z]{6}\+/,'').split(/[-,]/)[0]}, sans-serif;font-weight:${s.bold?700:400};font-style:${s.italic?'italic':'normal'};font-size:${s.fontSize}px;color:rgb(${s.color.r*255|0},${s.color.g*255|0},${s.color.b*255|0});opacity:${s.opacity}`; (t.list ? d.lastChild : d).appendChild(span); }
     div.appendChild(d);
   }
   document.getElementById('pages').appendChild(div);

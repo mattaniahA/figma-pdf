@@ -34,10 +34,14 @@ export interface TextSpec {
   letterSpacing: number;
   /** Baseline-to-baseline distance in px (null for a single line). */
   lineHeight: number | null;
+  /** Extra space between paragraphs / list items in px. */
+  paragraphSpacing: number;
   /** Font metrics from the PDF, as fractions of fontSize (descent is negative). */
   ascent: number;
   descent: number;
   lineCount: number;
+  /** When set, paragraphs are list items (bullet glyphs/vectors were removed). */
+  list: "UNORDERED" | "ORDERED" | null;
 }
 
 export interface ImageSpec {

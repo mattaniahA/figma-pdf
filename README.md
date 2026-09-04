@@ -2,7 +2,8 @@
 
 Import a PDF into Figma as one frame per page with **editable** content:
 
-- **Text** becomes real text layers: position, size, rotation, colour, mixed bold/italic runs, paragraphs with line height, detected letter-spacing. PDF fonts are mapped to fonts installed on your machine (with an `Inter` fallback and a report of what was substituted).
+- **Text** becomes real text layers: position, size, rotation, colour, mixed bold/italic runs, paragraphs with line height, detected letter-spacing.
+- **Bulleted and numbered lists** become Figma lists. Bullet glyphs (`•`, `–`, `1.` …) and bullets drawn as tiny vector dots/dashes are removed and the items are merged into one text layer with list formatting, soft line breaks inside items, and paragraph spacing between items. PDF fonts are mapped to fonts installed on your machine (with an `Inter` fallback and a report of what was substituted).
 - **Vector graphics** (lines, shapes, fills, strokes, dashes, clips, linear/radial gradients) become editable vector layers, imported via SVG.
 - **Images** (including stencil masks) become image-filled rectangles placed with the exact PDF transform.
 - Invisible OCR text layers and hidden optional-content layers are skipped.
@@ -46,7 +47,7 @@ UI iframe (pdf.js)                         Main thread (Figma API)
 Key files:
 
 - `src/ui/pdf/walkOps.ts` — walks the PDF operator list, keeps a graphics-state stack, emits SVG paths/clips/gradients, extracts images, records the fill colour of every text-drawing op.
-- `src/ui/pdf/extractText.ts` — groups pdf.js text items into lines and paragraphs, keeps styled runs, assigns colours.
+- `src/ui/pdf/extractText.ts` — groups pdf.js text items into lines, paragraphs and lists (claiming bullet glyphs and tiny vector shapes next to a line), keeps styled runs, assigns colours.
 - `src/main/fonts.ts` — maps PDF font names (`ABCDEF+Helvetica-BoldOblique`, `Calibri,Bold`, …) to available Figma fonts.
 - `src/main/text.ts`, `src/main/build.ts` — create frames, images, vectors and text nodes.
 
@@ -71,4 +72,5 @@ The generated `*.figma.js` can be run inside Figma (for example through the Figm
 - pdf.js occasionally inserts spaces into letter-spaced text (`R O T A T E D`).
 - Mesh shadings, tiling patterns and soft masks are approximated (flat grey) or skipped, with a warning in the panel.
 - Fonts not installed locally fall back to `Inter`; check the font report after import.
+- Bullets are detected geometrically (a tiny shape or lone glyph just left of a line); unusual list layouts fall back to plain text plus a "Small shapes" vector layer for unclaimed dots.
 - Very complex pages produce large SVGs; if Figma rejects one, it is rasterized to an image layer instead.

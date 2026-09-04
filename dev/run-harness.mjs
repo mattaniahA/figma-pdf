@@ -27,7 +27,7 @@ const summary = await page.evaluate(() =>
   window.__pages.map((p) => ({
     index: p.index, width: p.width, height: p.height, warnings: p.warnings,
     elements: p.elements.map((e) => e.kind === "vector" ? { kind: "vector", svgLen: e.vector.svg.length, paths: (e.vector.svg.match(/<path/g) || []).length } : { kind: "image", w: e.image.width, h: e.image.height, t: e.image.transform.map((v) => +v.toFixed(1)), png: e.image.png.length }),
-    texts: p.texts.map((t) => ({ text: t.segments.map((s) => s.text).join(""), x: +t.x.toFixed(1), y: +t.y.toFixed(1), angle: +t.angle.toFixed(1), size: +t.fontSize.toFixed(1), lh: t.lineHeight && +t.lineHeight.toFixed(1), lines: t.lineCount, segs: t.segments.map((s) => `${s.fontName}${s.bold ? " B" : ""}${s.italic ? " I" : ""} #${[s.color.r, s.color.g, s.color.b].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`) })),
+    texts: p.texts.map((t) => ({ text: t.segments.map((s) => s.text).join(""), x: +t.x.toFixed(1), y: +t.y.toFixed(1), angle: +t.angle.toFixed(1), size: +t.fontSize.toFixed(1), lh: t.lineHeight && +t.lineHeight.toFixed(1), lines: t.lineCount, list: t.list, ps: t.paragraphSpacing, segs: t.segments.map((s) => `${s.fontName}${s.bold ? " B" : ""}${s.italic ? " I" : ""} #${[s.color.r, s.color.g, s.color.b].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`) })),
   })),
 );
 const name = path.basename(pdf, ".pdf");

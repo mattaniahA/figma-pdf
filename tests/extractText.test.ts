@@ -59,3 +59,37 @@ describe("extractTexts", () => {
     expect(spec.angle).toBeCloseTo(-90);
   });
 });
+
+describe("lists", () => {
+  it("turns bullet glyphs into list items and merges consecutive items", () => {
+    const tc = { items: [
+      item("•", 10, 100), item("First item", 20, 100, 10, "f1", { hasEOL: true }),
+      item("continues here", 20, 88, 10, "f1", { hasEOL: true }),
+      item("•", 10, 76), item("Second item", 20, 76),
+    ], styles: {} } as any;
+    const runs = [run("•"), run("First item"), run("continues here"), run("•"), run("Second item")];
+    const specs = extractTexts(tc, vt, fonts, runs, "keepBreaks");
+    expect(specs).toHaveLength(1);
+    expect(specs[0].list).toBe("UNORDERED");
+    expect(specs[0].segments.map((s) => s.text).join("")).toBe("First item continues here\nSecond item");
+    expect(specs[0].x).toBe(10);
+  });
+
+  it("claims vector dots left of a line as bullets", () => {
+    const tc = { items: [item("Dot item", 20, 100)], styles: {} } as any;
+    const dot = { cx: 13, cy: H - 103, width: 3, height: 3, markup: "<path/>", clips: [], used: false };
+    const far = { cx: 150, cy: 20, width: 3, height: 3, markup: "<path/>", clips: [], used: false };
+    const [spec] = extractTexts(tc, vt, fonts, [run("Dot item")], "keepBreaks", [dot, far]);
+    expect(spec.list).toBe("UNORDERED");
+    expect(dot.used).toBe(true);
+    expect(far.used).toBe(false);
+    expect(spec.x).toBeCloseTo(11.5);
+  });
+
+  it("keeps inline dashes as text", () => {
+    const tc = { items: [item("a", 10, 100), item("-", 17, 100), item("b", 24, 100)], styles: {} } as any;
+    const [spec] = extractTexts(tc, vt, fonts, [run("a"), run("-"), run("b")], "lines");
+    expect(spec.list).toBeNull();
+    expect(spec.segments[0].text).toBe("a-b");
+  });
+});

@@ -1,7 +1,7 @@
 import type { TextContent, TextItem } from "pdfjs-dist/types/src/display/api";
 import type { Matrix, TextSegment, TextSpec } from "../../shared/types";
 import { mul } from "./geometry";
-import type { GlyphRun } from "./walkOps";
+import type { BulletCandidate, GlyphRun } from "./walkOps";
 
 export interface FontInfo {
   name: string;
@@ -12,6 +12,7 @@ export interface FontInfo {
 }
 
 export type TextMode = "lines" | "keepBreaks" | "flow";
+type ListType = "UNORDERED" | "ORDERED";
 
 interface Piece {
   text: string;
@@ -39,10 +40,20 @@ interface Line {
   pieces: number;
   singleChars: number;
   gaps: number[];
+  list: ListType | null;
+  /** Offset along the baseline from the text origin to the bullet's left edge (negative). */
+  bulletU: number;
+}
+
+interface Para {
+  lines: Line[];
+  gaps: number[];
+  list: ListType | null;
 }
 
 const isSpace = (s: string) => /^\s*$/.test(s);
-
+const BULLET_GLYPH = /^[\u2022\u00b7\u25e6\u25aa\u25ab\u25cf\u25cb\u25a0\u25a1\u2023\u2043\u2013\u2014*\u2219-]$/;
+const ORDERED_GLYPH = /^\d{1,2}[.)]$/;
 const norm = (s: string) => s.normalize("NFKC");
 
 /**
@@ -66,9 +77,8 @@ function makeColorAssigner(runs: GlyphRun[]) {
     const want = [...norm(str)].filter((c) => !isSpace(c));
     if (!want.length) return null;
     if (chars[cursor] !== want[0]) {
-      const probe = want.slice(0, 2).join("");
       for (let j = cursor; j < Math.min(chars.length, cursor + 80); j++) {
-        if (chars[j] === want[0] && (want.length < 2 || chars[j + 1] === want[1]) && probe) {
+        if (chars[j] === want[0] && (want.length < 2 || chars[j + 1] === want[1])) {
           cursor = j;
           break;
         }
@@ -86,6 +96,7 @@ export function extractTexts(
   fonts: Map<string, FontInfo>,
   runs: GlyphRun[],
   mode: TextMode,
+  bullets: BulletCandidate[] = [],
 ): TextSpec[] {
   const scale = Math.hypot(viewportTransform[0], viewportTransform[1]);
   const colorOf = makeColorAssigner(runs);
@@ -124,6 +135,7 @@ export function extractTexts(
   const lines: Line[] = [];
   let line: Line | null = null;
   let prevEol = false;
+  let pendingBullet: { x: number; y: number; angle: number; fontSize: number; type: ListType } | null = null;
   const segFor = (p: Piece, text: string): TextSegment => {
     const f = fonts.get(p.fontKey);
     return {
@@ -164,6 +176,13 @@ export function extractTexts(
       }
     }
     if (!joined) {
+      // A lone bullet / number glyph at the start of a line marks a list item.
+      const t = p.text.trim();
+      if (BULLET_GLYPH.test(t) || ORDERED_GLYPH.test(t)) {
+        pendingBullet = { x: p.x, y: p.y, angle: p.angle, fontSize: p.fontSize, type: BULLET_GLYPH.test(t) ? "UNORDERED" : "ORDERED" };
+        prevEol = p.eol;
+        continue;
+      }
       line = {
         x: p.x,
         y: p.y,
@@ -178,7 +197,20 @@ export function extractTexts(
         pieces: 1,
         singleChars: p.text.trim().length === 1 ? 1 : 0,
         gaps: [],
+        list: null,
+        bulletU: 0,
       };
+      if (pendingBullet) {
+        const dx = pendingBullet.x - line.x;
+        const dy = pendingBullet.y - line.y;
+        const u = dx * line.cos + dy * line.sin;
+        const v = -dx * line.sin + dy * line.cos;
+        if (Math.abs(pendingBullet.angle - line.angle) < 0.01 && Math.abs(v) < 0.4 * line.fontSize && u < -0.1 * line.fontSize && u > -4 * line.fontSize) {
+          line.list = pendingBullet.type;
+          line.bulletU = u;
+        }
+        pendingBullet = null;
+      }
       lines.push(line);
     }
     prevEol = p.eol;
@@ -186,6 +218,25 @@ export function extractTexts(
   for (const l of lines) {
     const last = l.segments[l.segments.length - 1];
     last.text = last.text.replace(/\s+$/, "");
+  }
+
+  // 2b. Vector bullets (dots drawn as paths) sitting just left of a line.
+  for (const b of bullets) {
+    if (b.used) continue;
+    for (const l of lines) {
+      if (l.list) continue;
+      const dx = b.cx - l.x;
+      const dy = b.cy - l.y;
+      const u = dx * l.cos + dy * l.sin;
+      const v = -dx * l.sin + dy * l.cos;
+      const fs = l.fontSize;
+      if (u < -0.15 * fs && u > -3.5 * fs && v < 0.15 * fs && v > -0.85 * fs) {
+        l.list = "UNORDERED";
+        l.bulletU = u - Math.max(b.width, b.height) / 2;
+        b.used = true;
+        break;
+      }
+    }
   }
 
   const metrics = (l: Line) => {
@@ -200,37 +251,29 @@ export function extractTexts(
     if (median < 0.02 * l.fontSize || median > 0.5 * l.fontSize) return 0;
     return Math.round(median * 100) / 100;
   };
-  const toSpec = (l: Line): TextSpec => ({
-    segments: l.segments,
-    letterSpacing: letterSpacing(l),
-    x: l.x,
-    y: l.y,
-    angle: (l.angle * 180) / Math.PI,
-    width: l.end - l.start,
-    fontSize: l.fontSize,
-    lineHeight: null,
-    lineCount: 1,
-    ...metrics(l),
-  });
+  const origin = (l: Line) => (l.list ? { x: l.x + l.bulletU * l.cos, y: l.y + l.bulletU * l.sin } : { x: l.x, y: l.y });
 
-  if (mode === "lines") return lines.map(toSpec);
-
-  // 3. Lines → paragraphs
-  const specs: TextSpec[] = [];
-  let para: { lines: Line[]; gaps: number[] } | null = null;
-  const flush = () => {
-    if (!para) return;
-    const first = para.lines[0];
-    if (para.lines.length === 1) {
-      specs.push(toSpec(first));
-    } else {
-      const lineHeight = para.gaps.reduce((a, b) => a + b, 0) / para.gaps.length;
-      const segments: TextSegment[] = [];
-      para.lines.forEach((l, i) => {
-        if (i > 0) {
-          const sep = mode === "flow" ? " " : "\n";
-          const last = segments[segments.length - 1];
-          last.text += sep;
+  const specFromParas = (paras: Para[]): TextSpec => {
+    const first = paras[0].lines[0];
+    const allLines = paras.flatMap((p) => p.lines);
+    const innerGaps = paras.flatMap((p) => p.gaps);
+    // Baseline gaps between consecutive list items become paragraph spacing.
+    const itemGaps: number[] = [];
+    for (let i = 1; i < paras.length; i++) {
+      const prev = paras[i - 1].lines[paras[i - 1].lines.length - 1];
+      const next = paras[i].lines[0];
+      const dx = next.x - prev.x, dy = next.y - prev.y;
+      itemGaps.push(-dx * prev.sin + dy * prev.cos);
+    }
+    const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+    const lineHeight = innerGaps.length ? mean(innerGaps) : itemGaps.length ? mean(itemGaps) : null;
+    const paragraphSpacing = innerGaps.length && itemGaps.length ? Math.max(0, mean(itemGaps) - lineHeight!) : 0;
+    const segments: TextSegment[] = [];
+    paras.forEach((para, pi) => {
+      para.lines.forEach((l, li) => {
+        if (pi > 0 || li > 0) {
+          const sep = li === 0 ? "\n" : mode === "flow" ? " " : para.list ? " " : "\n";
+          segments[segments.length - 1].text += sep;
         }
         for (const s of l.segments) {
           const last = segments[segments.length - 1];
@@ -241,23 +284,31 @@ export function extractTexts(
           }
         }
       });
-      specs.push({
-        segments,
-        letterSpacing: letterSpacing(first),
-        x: first.x,
-        y: first.y,
-        angle: (first.angle * 180) / Math.PI,
-        width: Math.max(...para.lines.map((l) => l.end - l.start)),
-        fontSize: first.fontSize,
-        lineHeight,
-        lineCount: para.lines.length,
-        ...metrics(first),
-      });
-    }
-    para = null;
+    });
+    const o = origin(first);
+    return {
+      segments,
+      letterSpacing: letterSpacing(first),
+      x: o.x,
+      y: o.y,
+      angle: (first.angle * 180) / Math.PI,
+      width: Math.max(...allLines.map((l) => l.end - l.start - Math.min(0, l.bulletU))),
+      fontSize: first.fontSize,
+      lineHeight,
+      paragraphSpacing: paragraphSpacing > 0.5 ? Math.round(paragraphSpacing * 100) / 100 : 0,
+      lineCount: allLines.length,
+      list: paras[0].list,
+      ...metrics(first),
+    };
   };
+
+  if (mode === "lines") return lines.map((l) => specFromParas([{ lines: [l], gaps: [], list: l.list }]));
+
+  // 3. Lines → paragraphs (a bullet always starts a new one)
+  const paras: Para[] = [];
+  let para: Para | null = null;
   for (const l of lines) {
-    if (para) {
+    if (para && !l.list) {
       const prev = para.lines[para.lines.length - 1];
       const dx = l.x - prev.x;
       const dy = l.y - prev.y;
@@ -275,11 +326,37 @@ export function extractTexts(
         para.gaps.push(v);
         continue;
       }
-      flush();
     }
-    para = { lines: [l], gaps: [] };
+    para = { lines: [l], gaps: [], list: l.list };
+    paras.push(para);
   }
-  flush();
+
+  // 4. Consecutive list items → one list text node
+  const specs: TextSpec[] = [];
+  let group: Para[] = [];
+  const flushGroup = () => {
+    if (group.length) specs.push(specFromParas(group));
+    group = [];
+  };
+  for (const p of paras) {
+    if (group.length && p.list && p.list === group[0].list) {
+      const prevPara = group[group.length - 1];
+      const prev = prevPara.lines[prevPara.lines.length - 1];
+      const l = p.lines[0];
+      const dx = l.x - prev.x;
+      const dy = l.y - prev.y;
+      const v = -dx * prev.sin + dy * prev.cos;
+      const fs = prev.fontSize;
+      const bulletAligned = Math.abs(origin(l).x - origin(group[0].lines[0]).x) < 1.5 * fs;
+      if (Math.abs(l.angle - prev.angle) < 0.01 && Math.abs(l.fontSize - fs) < 0.6 && v > 0.75 * fs && v < 2.6 * fs && bulletAligned) {
+        group.push(p);
+        continue;
+      }
+    }
+    flushGroup();
+    group = [p];
+  }
+  flushGroup();
   return specs;
 }
 

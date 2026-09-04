@@ -12,10 +12,24 @@ export interface GlyphRun {
   visible: boolean;
 }
 
+/** A tiny filled shape that is probably a list bullet; held back from the SVG until text matching decides. */
+export interface BulletCandidate {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  markup: string;
+  clips: string[];
+  used: boolean;
+}
+
 export interface WalkResult {
   elements: ElementSpec[];
   runs: GlyphRun[];
   warnings: string[];
+  bullets: BulletCandidate[];
+  /** Builds a vector element from bullet candidates that no text line claimed. */
+  leftoverVector(unused: BulletCandidate[]): ElementSpec | null;
 }
 
 interface GState {
@@ -68,6 +82,7 @@ export async function walkOps(
   const elements: ElementSpec[] = [];
   const runs: GlyphRun[] = [];
   const warnings = new Set<string>();
+  const bullets: BulletCandidate[] = [];
 
   let state: GState = {
     ctm: viewportTransform,
@@ -120,6 +135,32 @@ export async function walkOps(
     openTo(state.clips);
     body.push(markup);
   };
+  const wrapSvg = (defsMarkup: string, inner: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(pageWidth)}" height="${fmt(pageHeight)}" ` +
+    `viewBox="0 0 ${fmt(pageWidth)} ${fmt(pageHeight)}">${defsMarkup}${inner}</svg>`;
+
+  /** Bounding box of a path's points in page space (curve control points included). */
+  const pathBBox = (data: Float32Array | number[], ctm: Matrix) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const take = (x: number, y: number) => {
+      const [px, py] = apply(ctm, x, y);
+      minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+      minY = Math.min(minY, py); maxY = Math.max(maxY, py);
+    };
+    for (let i = 0; i < data.length; ) {
+      switch (data[i++]) {
+        case D_MOVE: case D_LINE: take(data[i++], data[i++]); break;
+        case D_CURVE: take(data[i++], data[i++]); take(data[i++], data[i++]); take(data[i++], data[i++]); break;
+        case D_QUAD: take(data[i++], data[i++]); take(data[i++], data[i++]); break;
+        case D_CLOSE: break;
+        default: return null;
+      }
+    }
+    return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+  };
+  /** Dots, squares and short dashes small enough to be list bullets. */
+  const isBulletShaped = (w: number, h: number) =>
+    (w >= 0.8 && h >= 0.8 && w <= 9 && h <= 9 && w / h > 0.5 && w / h < 2) || (h <= 2.2 && w >= 3 && w <= 12);
 
   // --- helpers -------------------------------------------------------------
   const pathToD = (data: Float32Array | number[] | null): string => {
@@ -167,7 +208,7 @@ export async function walkOps(
     return s;
   };
 
-  const paintPath = (d: string, doFill: boolean, doStroke: boolean, evenOdd: boolean) => {
+  const paintPath = (d: string, doFill: boolean, doStroke: boolean, evenOdd: boolean, data: Float32Array | null = null) => {
     if (!d) return;
     const fill = doFill && state.fill ? state.fill : null;
     const stroke = doStroke && state.stroke ? state.stroke : null;
@@ -177,7 +218,18 @@ export async function walkOps(
     if (fill && evenOdd) attrs += ` fill-rule="evenodd"`;
     if (fill && state.fillAlpha < 1) attrs += ` fill-opacity="${fmt(state.fillAlpha)}"`;
     if (stroke) attrs += strokeAttrs();
-    emit(`<path${attrs}/>`);
+    const markup = `<path${attrs}/>`;
+    if (fill && !stroke && data && opts.vectors && contentVisible) {
+      const bb = pathBBox(data, state.ctm);
+      if (bb) {
+        const w = bb.maxX - bb.minX, h = bb.maxY - bb.minY;
+        if (isBulletShaped(w, h)) {
+          bullets.push({ cx: (bb.minX + bb.maxX) / 2, cy: (bb.minY + bb.maxY) / 2, width: w, height: h, markup, clips: state.clips.slice(), used: false });
+          return;
+        }
+      }
+    }
+    emit(markup);
   };
 
   const applyPendingClip = (data: Float32Array | number[] | null) => {
@@ -382,8 +434,8 @@ export async function walkOps(
         const data: Float32Array | null = args[1]?.[0] ?? null;
         const d = pathToD(data);
         switch (op) {
-          case OPS.fill: paintPath(d, true, false, false); break;
-          case OPS.eoFill: paintPath(d, true, false, true); break;
+          case OPS.fill: paintPath(d, true, false, false, data); break;
+          case OPS.eoFill: paintPath(d, true, false, true, data); break;
           case OPS.stroke:
           case OPS.closeStroke: paintPath(d, false, true, false); break;
           case OPS.fillStroke:
@@ -509,5 +561,21 @@ export async function walkOps(
     }
   }
   flushSegment();
-  return { elements, runs, warnings: [...warnings] };
+  const defsMarkup = defs.length ? `<defs>${defs.join("")}</defs>` : "";
+  const leftoverVector = (unused: BulletCandidate[]): ElementSpec | null => {
+    if (!unused.length) return null;
+    const parts: string[] = [];
+    let open: string[] = [];
+    for (const b of unused) {
+      let common = 0;
+      while (common < b.clips.length && common < open.length && b.clips[common] === open[common]) common++;
+      for (let i = open.length; i > common; i--) parts.push("</g>");
+      for (let i = common; i < b.clips.length; i++) parts.push(`<g clip-path="url(#${b.clips[i]})">`);
+      open = b.clips.slice();
+      parts.push(b.markup);
+    }
+    for (let i = open.length; i > 0; i--) parts.push("</g>");
+    return { kind: "vector", vector: { svg: wrapSvg(defsMarkup, parts.join("")), name: "Small shapes" } };
+  };
+  return { elements, runs, warnings: [...warnings], bullets, leftoverVector };
 }

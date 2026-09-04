@@ -104,9 +104,12 @@ async function convertPage(pdf: PDFDocumentProxy, num: number, options: ImportOp
   });
   const textContent = await page.getTextContent();
   const fonts = await fontInfos(page, textContent.styles);
-  const texts = extractTexts(textContent, vt, fonts, walk.runs, options.textMode);
+  const texts = extractTexts(textContent, vt, fonts, walk.runs, options.textMode, walk.bullets);
+  const elements = walk.elements.slice();
+  const leftover = walk.leftoverVector(walk.bullets.filter((b) => !b.used));
+  if (leftover) elements.push(leftover);
   page.cleanup();
-  return { index: num, width: viewport.width, height: viewport.height, elements: walk.elements, texts, warnings: walk.warnings };
+  return { index: num, width: viewport.width, height: viewport.height, elements, texts, warnings: walk.warnings };
 }
 
 async function run() {

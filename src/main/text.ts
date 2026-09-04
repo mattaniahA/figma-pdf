@@ -36,6 +36,7 @@ export async function createTextNode(spec: TextSpec, fonts: FontResolver, parent
 
   parent.appendChild(node);
   node.name = (spec.list ? "List: " : "") + characters.split(/[\n\u2028]/)[0].slice(0, 40);
+  fitWidth(node, spec, characters);
 
   // Position: Figma centres the glyph box inside the line-height box, so the
   // first baseline sits at top + (lineHeight - glyphHeight)/2 + ascent.
@@ -50,4 +51,36 @@ export async function createTextNode(spec: TextSpec, fonts: FontResolver, parent
     [sin, cos, tly],
   ];
   return node;
+}
+
+/**
+ * Substitute fonts are often wider than the PDF's. Tighten tracking (and, as a
+ * last resort, shrink the type a little) until the widest line matches the
+ * width it had on the page, then give multi-line nodes a fixed box of that width.
+ */
+function fitWidth(node: TextNode, spec: TextSpec, characters: string) {
+  const target = spec.width;
+  if (!(target > 0)) return;
+  const lines = characters.split(/[\n\u2028]/);
+  const longest = Math.max(...lines.map((l) => l.length), 1);
+  const baseSpacing = spec.letterSpacing || 0;
+  if (node.width > target * 1.02) {
+    const excess = node.width - target;
+    let tracking = -excess / Math.max(1, longest - 1);
+    tracking = Math.max(tracking, -0.08 * spec.fontSize);
+    node.letterSpacing = { unit: "PIXELS", value: baseSpacing + tracking };
+  }
+  if (node.width > target * 1.03) {
+    const k = Math.max(0.9, target / node.width);
+    let offset = 0;
+    for (const seg of spec.segments) {
+      const end = offset + seg.text.length;
+      if (end > offset) node.setRangeFontSize(offset, end, Math.max(1, seg.fontSize * k));
+      offset = end;
+    }
+  }
+  if (spec.lineCount > 1) {
+    node.textAutoResize = "HEIGHT";
+    node.resize(Math.max(node.width, target) + 1, node.height);
+  }
 }

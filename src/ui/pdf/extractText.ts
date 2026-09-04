@@ -320,8 +320,9 @@ export function extractTexts(
       const gapOk = v > 0.75 * fs && v < 2.4 * fs;
       const lastGap = para.gaps[para.gaps.length - 1];
       const consistent = lastGap === undefined || Math.abs(v - lastGap) < 0.2 * lastGap + 0.5;
-      const overlap = u < prev.end - prev.start && u > -(l.end - l.start) - 1.5 * fs;
-      if (sameAngle && sameSize && gapOk && consistent && overlap) {
+      // Continuation lines share the left edge (a hanging first-line indent of up to 3em is fine).
+      const aligned = u > -3 * fs && u < 1.5 * fs;
+      if (sameAngle && sameSize && gapOk && consistent && aligned) {
         para.lines.push(l);
         para.gaps.push(v);
         continue;

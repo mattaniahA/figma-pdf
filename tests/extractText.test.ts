@@ -93,3 +93,15 @@ describe("lists", () => {
     expect(spec.segments[0].text).toBe("a-b");
   });
 });
+
+describe("paragraph alignment", () => {
+  it("does not merge a right-aligned date with the left-aligned line below it", () => {
+    const tc = { items: [
+      item("6/2020 – 6/2024", 300, 100, 10, "f1", { hasEOL: true, width: 70 }),
+      item("One of three engineers on the team across every surface", 10, 88, 10, "f1", { width: 360 }),
+    ], styles: {} } as any;
+    const specs = extractTexts(tc, vt, fonts, [run("6/2020 – 6/2024"), run("One of three engineers on the team across every surface")], "keepBreaks");
+    expect(specs).toHaveLength(2);
+    expect(specs[1].x).toBe(10);
+  });
+});

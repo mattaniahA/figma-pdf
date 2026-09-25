@@ -70,6 +70,7 @@ export async function buildPage(session: Session, page: PageSpec): Promise<Frame
       frame.appendChild(node);
       node.x = 0;
       node.y = 0;
+      unwrapSvgFrame(node, frame);
     } catch (e) {
       const rect = figma.createRectangle();
       rect.name = `${el.vector.name} (rasterized)`;
@@ -89,6 +90,20 @@ export async function buildPage(session: Session, page: PageSpec): Promise<Frame
     }
   }
   return frame;
+}
+
+/**
+ * createNodeFromSvg wraps everything in a page-sized frame. Its children are
+ * already in page coordinates, so move them into the page frame directly:
+ * lines and shapes become plain vectors instead of sitting inside "Vectors N".
+ */
+function unwrapSvgFrame(svgFrame: FrameNode, page: FrameNode) {
+  let index = page.children.indexOf(svgFrame);
+  for (const child of [...svgFrame.children]) {
+    page.insertChild(index++, child); // keeps its position relative to (0, 0)
+    if (child.type === "VECTOR" && (child.width < 0.01 || child.height < 0.01)) child.name = "Line";
+  }
+  svgFrame.remove();
 }
 
 export function applyRaster(session: Session, pageIndex: number, elementIndex: number, png: Uint8Array) {

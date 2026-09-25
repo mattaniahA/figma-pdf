@@ -25,6 +25,14 @@ describe("parsePdfFontName", () => {
     expect(p.weight).toBe(700);
     expect(p.italic).toBe(true);
   });
+  it("strips optical-size suffixes from variable-font instances", () => {
+    expect(parsePdfFontName({ name: "IAAAAA+DMSans9pt-Regular", bold: false, italic: false }).family).toBe("dmsans");
+  });
+  it("prefers a measured weight over the name", () => {
+    const p = parsePdfFontName({ name: "IAAAAA+DMSans9pt-Regular", bold: true, italic: false, weight: 600 });
+    expect(p.weight).toBe(600);
+    expect(parsePdfFontName({ name: "DMSans9pt-Italic", bold: false, italic: false, weight: 500 }).italic).toBe(true);
+  });
   it("normalizes families", () => {
     expect(normalizeFamily("Times New Roman")).toBe("timesnewroman");
   });

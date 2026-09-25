@@ -86,6 +86,63 @@ describe("lists", () => {
     expect(spec.x).toBeCloseTo(11.5);
   });
 
+  it("claims bullets drawn after their (multi-line) item text", () => {
+    const tc = { items: [
+      item("First item", 20, 100, 10, "f1", { hasEOL: true }), item("wraps here", 20, 88, 10, "f1", { hasEOL: true }),
+      item("•", 10, 100, 10, "f1", { hasEOL: true }),
+      item("Second item", 20, 74, 10, "f1", { hasEOL: true }),
+      item("•", 10, 74),
+    ], styles: {} } as any;
+    const runs = [run("First item"), run("wraps here"), run("•"), run("Second item"), run("•")];
+    const specs = extractTexts(tc, vt, fonts, runs, "keepBreaks");
+    expect(specs).toHaveLength(1);
+    expect(specs[0].list).toBe("UNORDERED");
+    expect(specs[0].segments.map((s) => s.text).join("")).toBe("First item wraps here\nSecond item");
+    expect(specs[0].listItems).toEqual([{ type: "UNORDERED", level: 0 }, { type: "UNORDERED", level: 0 }]);
+    expect(specs[0].x).toBe(10);
+  });
+
+  it("keeps a bullet glyph with no item next to it as text", () => {
+    const tc = { items: [item("Title", 10, 150, 10, "f1", { hasEOL: true }), item("•", 100, 100)], styles: {} } as any;
+    const specs = extractTexts(tc, vt, fonts, [run("Title"), run("•")], "keepBreaks");
+    expect(specs.map((s) => s.segments[0].text)).toEqual(["Title", "•"]);
+    expect(specs.every((s) => s.list === null)).toBe(true);
+  });
+
+  it("splits markers that share a text item with the item text", () => {
+    const tc = { items: [
+      item("• Apples", 10, 100, 10, "f1", { hasEOL: true }), item("• Pears", 10, 88, 10, "f1", { hasEOL: true }),
+      item("2. Step two", 10, 50),
+    ], styles: {} } as any;
+    const specs = extractTexts(tc, vt, fonts, [run("• Apples"), run("• Pears"), run("2. Step two")], "keepBreaks");
+    expect(specs).toHaveLength(2);
+    expect(specs[0].list).toBe("UNORDERED");
+    expect(specs[0].segments[0].text).toBe("Apples\nPears");
+    expect(specs[0].x).toBe(10);
+    expect(specs[1].list).toBe("ORDERED");
+    expect(specs[1].segments[0].text).toBe("Step two");
+  });
+
+  it("recognises Symbol-font private-use bullets", () => {
+    const tc = { items: [item("", 10, 100), item("Word bullet", 25, 100)], styles: {} } as any;
+    const [spec] = extractTexts(tc, vt, fonts, [run(""), run("Word bullet")], "keepBreaks");
+    expect(spec.list).toBe("UNORDERED");
+    expect(spec.segments[0].text).toBe("Word bullet");
+  });
+
+  it("keeps nested items in the parent list with an indent level", () => {
+    const tc = { items: [
+      item("•", 10, 100), item("Parent", 20, 100, 10, "f1", { hasEOL: true }),
+      item("◦", 28, 88), item("Child", 38, 88, 10, "f1", { hasEOL: true }),
+      item("•", 10, 76), item("Sibling", 20, 76),
+    ], styles: {} } as any;
+    const runs = ["•", "Parent", "◦", "Child", "•", "Sibling"].map((t) => run(t));
+    const specs = extractTexts(tc, vt, fonts, runs, "keepBreaks");
+    expect(specs).toHaveLength(1);
+    expect(specs[0].segments[0].text).toBe("Parent\nChild\nSibling");
+    expect(specs[0].listItems!.map((i) => i!.level)).toEqual([0, 1, 0]);
+  });
+
   it("keeps inline dashes as text", () => {
     const tc = { items: [item("a", 10, 100), item("-", 17, 100), item("b", 24, 100)], styles: {} } as any;
     const [spec] = extractTexts(tc, vt, fonts, [run("a"), run("-"), run("b")], "lines");

@@ -11,6 +11,8 @@ export interface TextSegment {
   text: string;
   /** PostScript-ish font name from the PDF, e.g. "ABCDEF+Helvetica-Bold". */
   fontName: string;
+  /** Weight measured from the glyphs (100–900); overrides what the font name says. */
+  weight?: number;
   bold: boolean;
   italic: boolean;
   fontSize: number;
@@ -42,6 +44,8 @@ export interface TextSpec {
   lineCount: number;
   /** When set, paragraphs are list items (bullet glyphs/vectors were removed). */
   list: "UNORDERED" | "ORDERED" | null;
+  /** One entry per "\n"-separated paragraph: its list type and nesting level (null = plain paragraph). */
+  listItems?: ({ type: "UNORDERED" | "ORDERED"; level: number } | null)[] | null;
 }
 
 export interface ImageSpec {

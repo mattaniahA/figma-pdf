@@ -5,6 +5,8 @@ import type { BulletCandidate, GlyphRun } from "./walkOps";
 
 export interface FontInfo {
   name: string;
+  /** Measured weight (100–900) when the name can't be trusted, e.g. Type3 fonts. */
+  weight?: number;
   bold: boolean;
   italic: boolean;
   ascent: number;
@@ -51,9 +53,30 @@ interface Para {
   list: ListType | null;
 }
 
+/** A list marker (bullet glyph, number or vector dot) waiting to be matched to the line on its right. */
+interface Marker {
+  x: number; // glyphs: baseline origin; vectors: shape centre
+  y: number;
+  angle: number | null; // null for vector shapes
+  type: ListType;
+  /** Distance from the reference point to the marker's left edge along the baseline. */
+  halfWidth: number;
+  vector: BulletCandidate | null;
+  piece: Piece | null;
+  /** Index in `lines` where an unmatched glyph is put back as plain text. */
+  insertAt: number;
+}
+
 const isSpace = (s: string) => /^\s*$/.test(s);
-const BULLET_GLYPH = /^[\u2022\u00b7\u25e6\u25aa\u25ab\u25cf\u25cb\u25a0\u25a1\u2023\u2043\u2013\u2014*\u2219-]$/;
-const ORDERED_GLYPH = /^\d{1,2}[.)]$/;
+// Includes the private-use bullets Word emits for Symbol / Wingdings fonts.
+const BULLET_CHARS = "\u2022\u25e6\u25aa\u25ab\u25cf\u25cb\u25a0\u25a1\u2023\u2043\u2219\u27a2\u25ba\u25b8\u25c6\u2756\u2713\uf0b7\uf0a7\uf076\uf0d8\uf0fc\uf0a8";
+const BULLET_GLYPH = new RegExp(`^[${BULLET_CHARS}\\u00b7\\u2013\\u2014\\u2192*-]$`);
+const ORDERED_GLYPH = /^(?:(?:\d{1,3}|[a-zA-Z]|[ivxlc]{1,5})[.)]|\((?:\d{1,3}|[a-zA-Z]|[ivxlc]{1,5})\))$/;
+// Markers sharing a text item with their item's text ("\u2022 Text", "2. Step"). Dashes are left out: too common in prose.
+const INLINE_BULLET = new RegExp(`^[${BULLET_CHARS}]\\s*(?=\\S)`);
+const INLINE_ORDERED = /^(?:(?:\d{1,2}|[a-z])[.)]|\((?:\d{1,2}|[a-z])\))\s+(?=\S)/;
+/** Word's second-level bullet is a Courier "o". */
+const LETTER_O_FONT = /courier|symbol|wingding/i;
 const norm = (s: string) => s.normalize("NFKC");
 
 /**
@@ -133,14 +156,56 @@ export function extractTexts(
 
   // 2. Pieces → lines
   const lines: Line[] = [];
+  const markers: Marker[] = [];
   let line: Line | null = null;
   let prevEol = false;
-  let pendingBullet: { x: number; y: number; angle: number; fontSize: number; type: ListType } | null = null;
+  const markerType = (t: string, fontKey: string): ListType | null => {
+    if (BULLET_GLYPH.test(t)) return "UNORDERED";
+    if (t === "o" && LETTER_O_FONT.test(fonts.get(fontKey)?.name ?? fontKey)) return "UNORDERED";
+    if (ORDERED_GLYPH.test(t)) return "ORDERED";
+    return null;
+  };
+  const newLine = (p: Piece): Line => ({
+    x: p.x,
+    y: p.y,
+    angle: p.angle,
+    cos: Math.cos(p.angle),
+    sin: Math.sin(p.angle),
+    fontSize: p.fontSize,
+    start: 0,
+    end: p.width,
+    segments: [segFor(p, p.text.replace(/^\s+/, ""))],
+    fontKey: p.fontKey,
+    pieces: 1,
+    singleChars: p.text.trim().length === 1 ? 1 : 0,
+    gaps: [],
+    list: null,
+    bulletU: 0,
+  });
+  /** Splits "• Text" / "2. Step" into a list line whose origin is the text start. */
+  const splitInline = (p: Piece): Line | null => {
+    const text = p.text.replace(/^\s+/, "");
+    const bullet = text.match(INLINE_BULLET);
+    const m = bullet ?? text.match(INLINE_ORDERED);
+    if (!m) return null;
+    const off = (p.width * (p.text.length - text.length + m[0].length)) / p.text.length;
+    const l = newLine({
+      ...p,
+      text: text.slice(m[0].length),
+      x: p.x + off * Math.cos(p.angle),
+      y: p.y + off * Math.sin(p.angle),
+      width: p.width - off,
+    });
+    l.list = bullet ? "UNORDERED" : "ORDERED";
+    l.bulletU = -off;
+    return l;
+  };
   const segFor = (p: Piece, text: string): TextSegment => {
     const f = fonts.get(p.fontKey);
     return {
       text,
       fontName: f?.name ?? p.fontKey,
+      ...(f?.weight !== undefined ? { weight: f.weight } : {}),
       bold: f?.bold ?? false,
       italic: f?.italic ?? false,
       fontSize: p.fontSize,
@@ -176,67 +241,61 @@ export function extractTexts(
       }
     }
     if (!joined) {
-      // A lone bullet / number glyph at the start of a line marks a list item.
-      const t = p.text.trim();
-      if (BULLET_GLYPH.test(t) || ORDERED_GLYPH.test(t)) {
-        pendingBullet = { x: p.x, y: p.y, angle: p.angle, fontSize: p.fontSize, type: BULLET_GLYPH.test(t) ? "UNORDERED" : "ORDERED" };
+      // A lone bullet / number glyph starting a line is a list marker. It is matched to its
+      // line geometrically below, because many PDFs draw bullets after (or long before) the text.
+      const type = markerType(p.text.trim(), p.fontKey);
+      if (type) {
+        markers.push({ x: p.x, y: p.y, angle: p.angle, type, halfWidth: 0, vector: null, piece: p, insertAt: lines.length });
         prevEol = p.eol;
         continue;
       }
-      line = {
-        x: p.x,
-        y: p.y,
-        angle: p.angle,
-        cos: Math.cos(p.angle),
-        sin: Math.sin(p.angle),
-        fontSize: p.fontSize,
-        start: 0,
-        end: p.width,
-        segments: [segFor(p, p.text.replace(/^\s+/, ""))],
-        fontKey: p.fontKey,
-        pieces: 1,
-        singleChars: p.text.trim().length === 1 ? 1 : 0,
-        gaps: [],
-        list: null,
-        bulletU: 0,
-      };
-      if (pendingBullet) {
-        const dx = pendingBullet.x - line.x;
-        const dy = pendingBullet.y - line.y;
-        const u = dx * line.cos + dy * line.sin;
-        const v = -dx * line.sin + dy * line.cos;
-        if (Math.abs(pendingBullet.angle - line.angle) < 0.01 && Math.abs(v) < 0.4 * line.fontSize && u < -0.1 * line.fontSize && u > -4 * line.fontSize) {
-          line.list = pendingBullet.type;
-          line.bulletU = u;
-        }
-        pendingBullet = null;
-      }
+      line = splitInline(p) ?? newLine(p);
       lines.push(line);
     }
     prevEol = p.eol;
   }
-  for (const l of lines) {
-    const last = l.segments[l.segments.length - 1];
-    last.text = last.text.replace(/\s+$/, "");
-  }
 
-  // 2b. Vector bullets (dots drawn as paths) sitting just left of a line.
+  // 2b. Claim markers: glyphs and vector dots sitting just left of a line. Closest pairs win.
   for (const b of bullets) {
     if (b.used) continue;
+    const r = Math.max(b.width, b.height) / 2;
+    markers.push({ x: b.cx, y: b.cy, angle: null, type: "UNORDERED", halfWidth: r, vector: b, piece: null, insertAt: -1 });
+  }
+  const pairs: { m: Marker; l: Line; u: number; score: number }[] = [];
+  for (const m of markers) {
     for (const l of lines) {
       if (l.list) continue;
-      const dx = b.cx - l.x;
-      const dy = b.cy - l.y;
+      const dx = m.x - l.x;
+      const dy = m.y - l.y;
       const u = dx * l.cos + dy * l.sin;
       const v = -dx * l.sin + dy * l.cos;
       const fs = l.fontSize;
-      if (u < -0.15 * fs && u > -3.5 * fs && v < 0.15 * fs && v > -0.85 * fs) {
-        l.list = "UNORDERED";
-        l.bulletU = u - Math.max(b.width, b.height) / 2;
-        b.used = true;
-        break;
+      if (m.vector) {
+        if (u < -0.15 * fs && u > -3.5 * fs && v < 0.15 * fs && v > -0.85 * fs) {
+          pairs.push({ m, l, u: u - m.halfWidth, score: Math.abs(v + 0.35 * fs) / fs + (0.1 * -u) / fs });
+        }
+      } else if (Math.abs(m.angle! - l.angle) < 0.01 && Math.abs(v) < 0.4 * fs && u < -0.1 * fs && u > -4 * fs) {
+        pairs.push({ m, l, u, score: Math.abs(v) / fs + (0.1 * -u) / fs });
       }
     }
+  }
+  pairs.sort((a, b) => a.score - b.score);
+  const claimed = new Set<Marker>();
+  for (const { m, l, u } of pairs) {
+    if (claimed.has(m) || l.list) continue;
+    claimed.add(m);
+    l.list = m.type;
+    l.bulletU = u;
+    if (m.vector) m.vector.used = true;
+  }
+  // Unclaimed glyphs were not bullets after all: put them back as text so nothing disappears.
+  for (let i = markers.length - 1; i >= 0; i--) {
+    const m = markers[i];
+    if (m.piece && !claimed.has(m)) lines.splice(m.insertAt, 0, newLine(m.piece));
+  }
+  for (const l of lines) {
+    const last = l.segments[l.segments.length - 1];
+    last.text = last.text.replace(/\s+$/, "");
   }
 
   const metrics = (l: Line) => {
@@ -268,13 +327,28 @@ export function extractTexts(
     const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
     const lineHeight = innerGaps.length ? mean(innerGaps) : itemGaps.length ? mean(itemGaps) : null;
     const paragraphSpacing = innerGaps.length && itemGaps.length ? Math.max(0, mean(itemGaps) - lineHeight!) : 0;
+    // Nesting: each distinct bullet indent (more than 1.5em apart) is one level deeper.
+    const o = origin(first);
+    const indentOf = (l: Line) => { const p = origin(l); return (p.x - o.x) * first.cos + (p.y - o.y) * first.sin; };
+    const indents: number[] = [];
+    for (const d of paras.filter((p) => p.list).map((p) => indentOf(p.lines[0])).sort((a, b) => a - b)) {
+      if (!indents.length || d - indents[indents.length - 1] > 1.5 * first.fontSize) indents.push(d);
+    }
+    const levelOf = (p: Para) => {
+      const d = indentOf(p.lines[0]);
+      let best = 0;
+      indents.forEach((x, i) => { if (Math.abs(x - d) < Math.abs(indents[best] - d)) best = i; });
+      return best;
+    };
+    const listItems: NonNullable<TextSpec["listItems"]> = [];
     const segments: TextSegment[] = [];
     paras.forEach((para, pi) => {
+      const listItem = para.list ? { type: para.list, level: levelOf(para) } : null;
       para.lines.forEach((l, li) => {
-        if (pi > 0 || li > 0) {
-          const sep = li === 0 ? "\n" : mode === "flow" ? " " : para.list ? " " : "\n";
-          segments[segments.length - 1].text += sep;
-        }
+        const sep = li === 0 ? "\n" : mode === "flow" ? " " : para.list ? " " : "\n";
+        if (pi > 0 || li > 0) segments[segments.length - 1].text += sep;
+        // One entry per "\n"-separated paragraph of the node's text.
+        if ((pi === 0 && li === 0) || sep === "\n") listItems.push(listItem);
         for (const s of l.segments) {
           const last = segments[segments.length - 1];
           if (last && last.fontName === s.fontName && Math.abs(last.fontSize - s.fontSize) < 0.01 && sameColor(last, s)) {
@@ -285,19 +359,20 @@ export function extractTexts(
         }
       });
     });
-    const o = origin(first);
     return {
       segments,
       letterSpacing: letterSpacing(first),
       x: o.x,
       y: o.y,
       angle: (first.angle * 180) / Math.PI,
-      width: Math.max(...allLines.map((l) => l.end - l.start - Math.min(0, l.bulletU))),
+      // Widest line measured from the node's left edge (bullets and nested indents included).
+      width: Math.max(...allLines.map((l) => (l.x - o.x) * first.cos + (l.y - o.y) * first.sin + l.end - l.start)),
       fontSize: first.fontSize,
       lineHeight,
       paragraphSpacing: paragraphSpacing > 0.5 ? Math.round(paragraphSpacing * 100) / 100 : 0,
       lineCount: allLines.length,
       list: paras[0].list,
+      listItems: paras[0].list ? listItems : null,
       ...metrics(first),
     };
   };
@@ -332,7 +407,7 @@ export function extractTexts(
     paras.push(para);
   }
 
-  // 4. Consecutive list items → one list text node
+  // 4. Consecutive list items (including nested ones) → one list text node
   const specs: TextSpec[] = [];
   let group: Para[] = [];
   const flushGroup = () => {
@@ -340,7 +415,7 @@ export function extractTexts(
     group = [];
   };
   for (const p of paras) {
-    if (group.length && p.list && p.list === group[0].list) {
+    if (group.length && p.list && group[0].list) {
       const prevPara = group[group.length - 1];
       const prev = prevPara.lines[prevPara.lines.length - 1];
       const l = p.lines[0];
@@ -348,8 +423,14 @@ export function extractTexts(
       const dy = l.y - prev.y;
       const v = -dx * prev.sin + dy * prev.cos;
       const fs = prev.fontSize;
-      const bulletAligned = Math.abs(origin(l).x - origin(group[0].lines[0]).x) < 1.5 * fs;
-      if (Math.abs(l.angle - prev.angle) < 0.01 && Math.abs(l.fontSize - fs) < 0.6 && v > 0.75 * fs && v < 2.6 * fs && bulletAligned) {
+      const top = group[0].lines[0];
+      const a = origin(l), b = origin(top);
+      const indent = (a.x - b.x) * top.cos + (a.y - b.y) * top.sin;
+      // Same level must be the same list type; deeper levels (sub-lists) may differ.
+      const nested = indent >= 1.5 * fs && indent < 8 * fs;
+      const sibling = Math.abs(indent) < 1.5 * fs && p.list === group[0].list;
+      const sizeOk = Math.abs(l.fontSize - fs) < 0.6 || (nested && Math.abs(l.fontSize - fs) < 0.25 * fs);
+      if (Math.abs(l.angle - prev.angle) < 0.01 && sizeOk && v > 0.75 * fs && v < 2.6 * fs && (nested || sibling)) {
         group.push(p);
         continue;
       }

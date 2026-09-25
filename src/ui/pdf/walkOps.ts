@@ -48,7 +48,7 @@ interface GState {
 }
 
 // DrawOPS encoding used inside constructPath path buffers.
-const D_MOVE = 0, D_LINE = 1, D_CURVE = 2, D_QUAD = 3, D_CLOSE = 4;
+export const D_MOVE = 0, D_LINE = 1, D_CURVE = 2, D_QUAD = 3, D_CLOSE = 4;
 
 const CAPS = ["butt", "round", "square"];
 const JOINS = ["miter", "round", "bevel"];
@@ -130,9 +130,9 @@ export async function walkOps(
     elements.push({ kind: "vector", vector: { svg, name: `Vectors ${vectorCount}` } });
     body = [];
   };
-  const emit = (markup: string) => {
+  const emit = (markup: string, clips: string[] = state.clips) => {
     if (!opts.vectors || !contentVisible) return;
-    openTo(state.clips);
+    openTo(clips);
     body.push(markup);
   };
   const wrapSvg = (defsMarkup: string, inner: string) =>
@@ -181,20 +181,45 @@ export async function walkOps(
     return out.join("");
   };
 
-  /** True when the (line-only) path, transformed by ctm, is an axis-aligned rect covering the page. */
-  const coversPage = (data: Float32Array | number[] | null, ctm: Matrix): boolean => {
-    if (!data) return false;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  type BBox = { minX: number; minY: number; maxX: number; maxY: number };
+  /** Page-space bounds when the path is a single axis-aligned rectangle (lines only, no rotation). */
+  const axisRect = (data: Float32Array | number[] | null, ctm: Matrix): BBox | null => {
+    if (!data || Math.abs(ctm[1]) > 1e-6 || Math.abs(ctm[2]) > 1e-6) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, moves = 0, points = 0;
     for (let i = 0; i < data.length; ) {
       const op = data[i++];
       if (op === D_CLOSE) continue;
-      if (op !== D_MOVE && op !== D_LINE) return false;
+      if (op !== D_MOVE && op !== D_LINE) return null;
+      if (op === D_MOVE && ++moves > 1) return null;
       const [x, y] = apply(ctm, data[i++], data[i++]);
+      points++;
       minX = Math.min(minX, x); maxX = Math.max(maxX, x);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     }
-    if (Math.abs(ctm[1]) > 1e-6 || Math.abs(ctm[2]) > 1e-6) return false;
-    return minX <= 0.01 && minY <= 0.01 && maxX >= pageWidth - 0.01 && maxY >= pageHeight - 0.01;
+    if (points < 4 || points > 5) return null;
+    // Every vertex must sit on a corner of the bounds.
+    const eq = (a: number, b: number) => Math.abs(a - b) < 0.01;
+    for (let i = 0; i < data.length; ) {
+      const op = data[i++];
+      if (op === D_CLOSE) continue;
+      const [x, y] = apply(ctm, data[i++], data[i++]);
+      if (!(eq(x, minX) || eq(x, maxX)) || !(eq(y, minY) || eq(y, maxY))) return null;
+    }
+    return { minX, minY, maxX, maxY };
+  };
+  /** True when the (line-only) path, transformed by ctm, is an axis-aligned rect covering the page. */
+  const coversPage = (data: Float32Array | number[] | null, ctm: Matrix): boolean => {
+    const r = axisRect(data, ctm);
+    return !!r && r.minX <= 0.01 && r.minY <= 0.01 && r.maxX >= pageWidth - 0.01 && r.maxY >= pageHeight - 0.01;
+  };
+  /** Rectangular clips (page space), so clips that don't cut anything can be left out. */
+  const rectClips = new Map<string, BBox>();
+  const clipsFor = (bb: BBox | null): string[] => {
+    if (!bb) return state.clips;
+    return state.clips.filter((id) => {
+      const r = rectClips.get(id);
+      return !(r && bb.minX >= r.minX - 0.01 && bb.minY >= r.minY - 0.01 && bb.maxX <= r.maxX + 0.01 && bb.maxY <= r.maxY + 0.01);
+    });
   };
 
   const strokeAttrs = (): string => {
@@ -213,23 +238,44 @@ export async function walkOps(
     const fill = doFill && state.fill ? state.fill : null;
     const stroke = doStroke && state.stroke ? state.stroke : null;
     if (!fill && !stroke) return;
+    let bb: BBox | null = data ? pathBBox(data, state.ctm) : null;
+    if (bb && stroke) {
+      const scale = Math.sqrt(Math.abs(state.ctm[0] * state.ctm[3] - state.ctm[1] * state.ctm[2])) || 1;
+      const pad = (Math.max(state.lineWidth, 0) * scale) / 2 + 0.01;
+      bb = { minX: bb.minX - pad, minY: bb.minY - pad, maxX: bb.maxX + pad, maxY: bb.maxY + pad };
+    }
+    if (fill && !stroke && opts.vectors && contentVisible) {
+      const rect = axisRect(data, state.ctm);
+      if (rect) {
+        // Opaque white under everything else is just the page background (the frame is already white).
+        const nothingYet = body.length === 0 && elements.length === 0;
+        if (nothingYet && state.fillAlpha >= 1 && /^(#fff(fff)?|white|rgb\(255,\s*255,\s*255\))$/i.test(fill)) return;
+        // Hairline rules are drawn as thin filled rectangles: emit them as a stroked line.
+        const w = rect.maxX - rect.minX, h = rect.maxY - rect.minY;
+        const t = Math.min(w, h), len = Math.max(w, h);
+        if (t > 0 && t <= 2.5 && len > 12 && len >= 6 * t) {
+          const cx = (rect.minX + rect.maxX) / 2, cy = (rect.minY + rect.maxY) / 2;
+          const line = w >= h ? `M${fmt(rect.minX)} ${fmt(cy)}H${fmt(rect.maxX)}` : `M${fmt(cx)} ${fmt(rect.minY)}V${fmt(rect.maxY)}`;
+          const alpha = state.fillAlpha < 1 ? ` stroke-opacity="${fmt(state.fillAlpha)}"` : "";
+          emit(`<path d="${line}" fill="none" stroke="${fill}" stroke-width="${fmt(t)}"${alpha}/>`, clipsFor(rect));
+          return;
+        }
+      }
+    }
     let attrs = ` d="${d}" transform="${matrixAttr(state.ctm)}"`;
     attrs += fill ? ` fill="${fill}"` : ` fill="none"`;
     if (fill && evenOdd) attrs += ` fill-rule="evenodd"`;
     if (fill && state.fillAlpha < 1) attrs += ` fill-opacity="${fmt(state.fillAlpha)}"`;
     if (stroke) attrs += strokeAttrs();
     const markup = `<path${attrs}/>`;
-    if (fill && !stroke && data && opts.vectors && contentVisible) {
-      const bb = pathBBox(data, state.ctm);
-      if (bb) {
-        const w = bb.maxX - bb.minX, h = bb.maxY - bb.minY;
-        if (isBulletShaped(w, h)) {
-          bullets.push({ cx: (bb.minX + bb.maxX) / 2, cy: (bb.minY + bb.maxY) / 2, width: w, height: h, markup, clips: state.clips.slice(), used: false });
-          return;
-        }
+    if (fill && !stroke && bb && opts.vectors && contentVisible) {
+      const w = bb.maxX - bb.minX, h = bb.maxY - bb.minY;
+      if (isBulletShaped(w, h)) {
+        bullets.push({ cx: (bb.minX + bb.maxX) / 2, cy: (bb.minY + bb.maxY) / 2, width: w, height: h, markup, clips: clipsFor(bb), used: false });
+        return;
       }
     }
-    emit(markup);
+    emit(markup, clipsFor(bb));
   };
 
   const applyPendingClip = (data: Float32Array | number[] | null) => {
@@ -240,6 +286,8 @@ export async function walkOps(
     const d = pathToD(data);
     if (!d) return;
     const id = `c${++idCounter}`;
+    const rect = axisRect(data, state.ctm);
+    if (rect) rectClips.set(id, rect);
     defs.push(`<clipPath id="${id}"><path d="${d}" transform="${matrixAttr(state.ctm)}" clip-rule="${rule}"/></clipPath>`);
     state.clips = [...state.clips, id];
   };
@@ -437,11 +485,11 @@ export async function walkOps(
           case OPS.fill: paintPath(d, true, false, false, data); break;
           case OPS.eoFill: paintPath(d, true, false, true, data); break;
           case OPS.stroke:
-          case OPS.closeStroke: paintPath(d, false, true, false); break;
+          case OPS.closeStroke: paintPath(d, false, true, false, data); break;
           case OPS.fillStroke:
-          case OPS.closeFillStroke: paintPath(d, true, true, false); break;
+          case OPS.closeFillStroke: paintPath(d, true, true, false, data); break;
           case OPS.eoFillStroke:
-          case OPS.closeEOFillStroke: paintPath(d, true, true, true); break;
+          case OPS.closeEOFillStroke: paintPath(d, true, true, true, data); break;
           case OPS.endPath: break;
         }
         applyPendingClip(data);

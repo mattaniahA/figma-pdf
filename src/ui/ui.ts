@@ -3,6 +3,7 @@ import type { ImportOptions, MainToUi, Matrix, PageSpec, UiToMain } from "../sha
 import { loadPdf } from "./pdf/loadPdf";
 import { walkOps } from "./pdf/walkOps";
 import { extractTexts, type FontInfo } from "./pdf/extractText";
+import { estimateType3Weights } from "./pdf/fontWeight";
 import { rasterizeSvg } from "./pdf/rasterizeSvg";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -75,16 +76,27 @@ function readOptions(): ImportOptions {
   };
 }
 
-async function fontInfos(pdfPage: import("pdfjs-dist").PDFPageProxy, styles: Record<string, any>): Promise<Map<string, FontInfo>> {
+async function fontInfos(pdfPage: import("pdfjs-dist").PDFPageProxy, textContent: import("pdfjs-dist/types/src/display/api").TextContent): Promise<Map<string, FontInfo>> {
   const map = new Map<string, FontInfo>();
-  for (const [loadedName, style] of Object.entries(styles)) {
-    let font: any = null;
+  const styles = textContent.styles as Record<string, any>;
+  const chars = new Map<string, number>();
+  for (const item of textContent.items) {
+    if ("str" in item) chars.set(item.fontName, (chars.get(item.fontName) ?? 0) + item.str.length);
+  }
+  const fonts = new Map<string, any>();
+  for (const loadedName of Object.keys(styles)) {
     try {
-      font = pdfPage.commonObjs.has(loadedName) ? pdfPage.commonObjs.get(loadedName) : null;
+      fonts.set(loadedName, pdfPage.commonObjs.has(loadedName) ? pdfPage.commonObjs.get(loadedName) : null);
     } catch { /* not resolved */ }
+  }
+  const weights = estimateType3Weights([...fonts].map(([key, font]) => ({ key, font, chars: chars.get(key) ?? 0 })));
+  for (const [loadedName, style] of Object.entries(styles)) {
+    const font = fonts.get(loadedName) ?? null;
+    const weight = weights.get(loadedName);
     map.set(loadedName, {
       name: font?.name ?? style.fontFamily ?? loadedName,
-      bold: !!font?.bold || !!font?.black,
+      weight,
+      bold: weight !== undefined ? weight >= 600 : !!font?.bold || !!font?.black,
       italic: !!font?.italic,
       ascent: typeof style.ascent === "number" && style.ascent > 0 ? style.ascent : 0.9,
       descent: typeof style.descent === "number" && style.descent < 0 ? style.descent : -0.22,
@@ -103,7 +115,7 @@ async function convertPage(pdf: PDFDocumentProxy, num: number, options: ImportOp
     images: options.includeImages,
   });
   const textContent = await page.getTextContent();
-  const fonts = await fontInfos(page, textContent.styles);
+  const fonts = await fontInfos(page, textContent);
   const texts = extractTexts(textContent, vt, fonts, walk.runs, options.textMode, walk.bullets);
   const elements = walk.elements.slice();
   const leftover = walk.leftoverVector(walk.bullets.filter((b) => !b.used));

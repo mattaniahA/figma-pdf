@@ -4,6 +4,8 @@ export interface FontRequest {
   name: string;
   bold: boolean;
   italic: boolean;
+  /** Measured weight; wins over whatever the name says. */
+  weight?: number;
 }
 
 interface Parsed {
@@ -49,7 +51,8 @@ export function parsePdfFontName(req: FontRequest): Parsed & { familyWords: stri
   let name = req.name.replace(/^[A-Z]{6}\+/, ""); // subset tag
   name = name.replace(/(MT|PS|PSMT)$/g, "");
   const dash = name.search(/[-,]/);
-  const familyRaw = dash >= 0 ? name.slice(0, dash) : name;
+  // Optical-size instances of variable fonts: "DMSans9pt" → "DMSans"
+  const familyRaw = (dash >= 0 ? name.slice(0, dash) : name).replace(/([A-Za-z])\d+pt$/i, "$1");
   const styleRaw = dash >= 0 ? name.slice(dash + 1) : "";
   const familyWordsAll = splitCamel(familyRaw).split(" ").filter(Boolean);
   const styleWords = splitCamel(styleRaw);
@@ -59,8 +62,8 @@ export function parsePdfFontName(req: FontRequest): Parsed & { familyWords: stri
   const familyStyle = parseStyleWords(familyWordsAll.join(" "));
   const familyWords = familyWordsAll.filter((w) => !parseStyleWords(w).weight && !parseStyleWords(w).italic);
 
-  let weight = fromStyle.weight ?? familyStyle.weight ?? (req.bold ? 700 : 400);
-  if (req.bold && weight < 600 && fromStyle.weight === null && familyStyle.weight === null) weight = 700;
+  let weight = req.weight ?? fromStyle.weight ?? familyStyle.weight ?? (req.bold ? 700 : 400);
+  if (req.weight === undefined && req.bold && weight < 600 && fromStyle.weight === null && familyStyle.weight === null) weight = 700;
   const italic = fromStyle.italic || familyStyle.italic || req.italic;
   return { family: normalizeFamily(familyWords.join("")), weight, italic, familyWords };
 }
@@ -119,7 +122,7 @@ export class FontResolver {
     for (const style of styles) {
       const p = parseStyleWords(style);
       const w = p.weight ?? 400;
-      const condensed = /condensed|narrow|compressed|extended|expanded|display|caption|text|mono/i.test(style) ? 50 : 0;
+      const condensed = /condensed|narrow|compressed|extended|expanded|display|caption|text|mono|\d+\s*pt\b/i.test(style) ? 50 : 0;
       const score = Math.abs(w - weight) + (p.italic !== italic ? 250 : 0) + condensed;
       if (score < bestScore) { bestScore = score; best = style; }
     }
@@ -127,7 +130,7 @@ export class FontResolver {
   }
 
   resolve(req: FontRequest): Resolved {
-    const key = `${req.name}|${req.bold}|${req.italic}`;
+    const key = `${req.name}|${req.bold}|${req.italic}|${req.weight ?? ""}`;
     const hit = this.cache.get(key);
     if (hit) return hit;
     const parsed = parsePdfFontName(req);
@@ -151,7 +154,7 @@ export class FontResolver {
     const style = this.pickStyle(entry.styles, parsed.weight, parsed.italic);
     const resolved: Resolved = { fontName: { family: entry.family, style }, fallback };
     this.cache.set(key, resolved);
-    const label = req.name.replace(/^[A-Z]{6}\+/, "");
+    const label = req.name.replace(/^[A-Z]{6}\+/, "") + (req.weight !== undefined ? ` (${req.weight})` : "");
     this.mapping[label] = `${entry.family} ${style}${fallback ? " (fallback)" : ""}`;
     return resolved;
   }
